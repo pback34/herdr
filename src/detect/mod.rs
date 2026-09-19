@@ -97,7 +97,7 @@ impl Agent {
         Self::Cmd,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -120,6 +120,7 @@ impl Agent {
         Self::Letta,
         Self::Maki,
         Self::Muse,
+        Self::Cmd,
     ];
 }
 
@@ -1149,19 +1150,12 @@ mod tests {
             ("herdr:qwen", "qwen", Agent::Qwen),
             ("herdr:letta", "letta", Agent::Letta),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
+            ("herdr:cmd", "cmd", Agent::Cmd),
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
             assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
         }
-    }
-
-    #[test]
-    fn command_code_integration_is_session_identity_only() {
-        // `cmd` joins SCREEN_MANIFEST_AGENTS in the manifest step, so it is not in
-        // the loop above yet. This pins the identity-only classification now.
-        assert!(session_identity_only_integration("herdr:cmd", "cmd"));
-        assert!(!full_lifecycle_hook_authority("herdr:cmd", "cmd"));
     }
 
     #[test]

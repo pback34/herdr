@@ -1,0 +1,62 @@
+id = "cmd"
+version = "2026.09.19.1"
+min_engine_version = 2
+updated_at = "2026-09-19T00:00:00Z"
+aliases = ["command-code"]
+
+# Command Code draws its composer inside a two-horizontal-rule prompt box, so
+# the engine's `prompt_box_body` region isolates the composer line. A live turn
+# draws a status line carrying "esc to interrupt" just above that box. Finished
+# turns leave "<glyph> Worked for <duration>" in the transcript, which is
+# residue rather than live state, so no rule keys on the spinner glyph.
+#
+# Blocking dialogs replace the prompt box and render below the last horizontal
+# rule, so they are scoped with `after_last_horizontal_rule`. That keeps a
+# dialog that has already been answered in the transcript from holding the pane
+# blocked, and keeps a stale dialog out of the composer's idle evidence.
+
+[[rules]]
+id = "detailed_transcript_viewer"
+state = "unknown"
+priority = 1000
+region = "bottom_non_empty_lines(3)"
+skip_state_update = true
+# The footer renders as "DETAILED TRANSCRIPT ... esc to exit", but a narrow
+# terminal wraps the label across two lines (captured), so the two words are
+# matched separately instead of as one contiguous phrase.
+contains = ["DETAILED", "TRANSCRIPT"]
+
+[[rules]]
+id = "shell_command_permission"
+state = "blocked"
+priority = 980
+region = "after_last_horizontal_rule"
+visible_blocker = true
+# Two-line permission header; the command text after it wraps, so only the
+# invariant header is matched. Both lines must be present in one snapshot.
+contains = ["Execute Shell Command", "Command Code needs to execute"]
+
+[[rules]]
+id = "workspace_permission"
+state = "blocked"
+priority = 980
+region = "after_last_horizontal_rule"
+visible_blocker = true
+contains = ["Outside the workspace", "Use /add-dir"]
+
+[[rules]]
+id = "live_turn_working"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+# The live status line reads "<glyph> <gerund>…  esc to interrupt • <elapsed>".
+contains = ["esc to interrupt"]
+
+[[rules]]
+id = "composer_idle"
+state = "idle"
+priority = 950
+region = "prompt_box_body"
+visible_idle = true
+line_regex = ['^\s*❯']

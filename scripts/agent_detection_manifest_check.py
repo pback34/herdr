@@ -64,7 +64,16 @@ STAGED_PUBLISHED_MANIFESTS = {
     ),
 }
 
-UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {}
+UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {
+    # Bundled but intentionally not published: released stable clients have no
+    # cmd agent to identify it with. Add the manifest to
+    # distribution/agent-detection/ and remove this entry before the first
+    # stable release that ships it.
+    "cmd": (
+        "2026.09.19.1",
+        "27f1a40799fd5ff95d14a70a0227401619675aca2d01f71957804c6f09dd827d",
+    ),
+}
 
 
 def parse_args() -> argparse.Namespace:
