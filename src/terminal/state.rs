@@ -1337,6 +1337,7 @@ impl TerminalState {
                 | ("herdr:opencode", "opencode", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | ("herdr:grok", "grok", Some("new"))
+                | ("herdr:cmd", "cmd", Some("new"))
                 | (
                     "herdr:omp",
                     "omp",
@@ -4688,6 +4689,62 @@ mod tests {
                 .as_ref()
                 .map(|session| session.session_ref.value.as_str()),
             Some("grok-new")
+        );
+    }
+
+    #[test]
+    fn command_code_session_report_replaces_with_new_source() {
+        let mut terminal = test_terminal();
+        // Unlike Grok, `cmd` is a session-identity-only integration, so replacing
+        // a different session id also requires the foreground `cmd` process to be
+        // present. Grok's equivalent test needs no detected state because it is
+        // not in the identity-only set.
+        terminal.set_detected_state(Some(Agent::Cmd), AgentState::Idle);
+        terminal
+            .set_agent_session_ref(
+                "herdr:cmd".into(),
+                "cmd".into(),
+                crate::agent_resume::AgentSessionRef::id("cmd-old"),
+                Some(30),
+            )
+            .expect("initial session should be accepted");
+
+        // Without the `new` session-start source, a different id must not replace
+        // the pane's session, matching the other identity-only integrations.
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:cmd".into(),
+                "cmd".into(),
+                crate::agent_resume::AgentSessionRef::id("cmd-unsequenced"),
+                Some(31),
+                None,
+            )
+            .is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("cmd-old")
+        );
+
+        let mutation = terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:cmd".into(),
+                "cmd".into(),
+                crate::agent_resume::AgentSessionRef::id("cmd-new"),
+                Some(32),
+                Some("new".into()),
+            )
+            .expect("new should replace the cmd session");
+
+        assert!(mutation.session_ref_changed);
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("cmd-new")
         );
     }
 

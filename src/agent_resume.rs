@@ -225,6 +225,15 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:cmd", "cmd", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+            // `--session` is the only Command Code flag that resumes by
+            // transcript path or session-id prefix without a history picker.
+            vec![
+                crate::detect::interactive_agent_executable(crate::detect::Agent::Cmd).into(),
+                "--session".into(),
+                session_ref.value.clone(),
+            ]
+        }
         ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
             if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
                 if agent_id.is_empty() {
@@ -283,6 +292,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
             | ("herdr:letta", "letta")
+            | ("herdr:cmd", "cmd")
     )
 }
 
@@ -359,6 +369,7 @@ mod tests {
     fn planner_allows_supported_agents() {
         let pi_session = absolute_test_path("pi-session.jsonl");
         let omp_session = absolute_test_path("omp-session.jsonl");
+        let cmd_session = absolute_test_path("cmd-session.jsonl");
         assert_eq!(
             plan(
                 "herdr:claude",
@@ -537,6 +548,30 @@ mod tests {
             .argv,
             vec!["grok", "--resume", "grok-session"]
         );
+        // `cmd` resumes through `--session`, which accepts a session id or a
+        // transcript path, and uses the platform launch name (`command-code` on
+        // Windows, where `cmd` is the command interpreter).
+        let cmd_executable = crate::detect::interactive_agent_executable(crate::detect::Agent::Cmd);
+        assert_eq!(
+            plan(
+                "herdr:cmd",
+                "cmd",
+                &AgentSessionRef::id("cmd-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec![cmd_executable, "--session", "cmd-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:cmd",
+                "cmd",
+                &AgentSessionRef::path(&cmd_session).unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec![cmd_executable, "--session", cmd_session.as_str()]
+        );
         assert_eq!(
             plan(
                 "herdr:letta",
@@ -578,6 +613,14 @@ mod tests {
             "herdr:claude",
             "claude",
             &AgentSessionRef::path(&claude_session).unwrap()
+        )
+        .is_none());
+        // The community plugin reports under `commandcode`, which is not an
+        // official source, so its session refs are still discarded.
+        assert!(plan(
+            "commandcode",
+            "cmd",
+            &AgentSessionRef::id("cmd-session").unwrap()
         )
         .is_none());
     }
@@ -631,6 +674,23 @@ mod tests {
         assert!(
             session_ref_from_report("herdr:omp", "omp", None, Some("relative.jsonl".into()))
                 .is_none()
+        );
+
+        // `cmd` reports a session id; like every agent other than pi and omp it
+        // has no path form, so a path-only report is dropped.
+        let session_ref =
+            session_ref_from_report("herdr:cmd", "cmd", Some("cmd-id".into()), None).unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "cmd-id");
+        assert!(session_ref_from_report(
+            "herdr:cmd",
+            "cmd",
+            None,
+            Some(absolute_test_path("cmd-session.jsonl"))
+        )
+        .is_none());
+        assert!(
+            session_ref_from_report("commandcode", "cmd", Some("cmd-id".into()), None).is_none()
         );
 
         assert!(
@@ -769,6 +829,8 @@ mod tests {
         let kilo_session = absolute_test_path("kilo-session");
         let copilot_session = absolute_test_path("copilot-session");
         let devin_session = absolute_test_path("devin-session");
+        // `cmd` is deliberately absent here: it resumes through `--session`,
+        // which accepts a transcript path as well as a session id.
         assert!(plan(
             "herdr:hermes",
             "hermes",
