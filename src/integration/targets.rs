@@ -15,15 +15,17 @@ use super::command::shell_single_quote;
 use super::config_edit::{
     build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
     ensure_direct_command_hook, ensure_flat_command_hook, ensure_hermes_plugin_enabled,
-    ensure_hooks_object, ensure_simple_command_hook, hooks_object_if_present,
-    remove_direct_hook_commands, remove_flat_command_hook, remove_hermes_plugin_enabled,
-    remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
+    ensure_hooks_object, ensure_simple_command_hook, hook_command_variants,
+    hooks_object_if_present, remove_direct_hook_commands, remove_flat_command_hook,
+    remove_hermes_plugin_enabled, remove_hook_commands, remove_kimi_config_block,
+    remove_simple_command_hook,
 };
 use super::config_file::{check_config_targets, write_config};
 use super::env::{
-    antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
-    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir, mastracode_dir,
-    omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    antigravity_cli_dir, claude_dir, codex_dir, command_code_dir, copilot_dir, cursor_dir,
+    devin_dir, droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir,
+    mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir,
+    qodercli_dir, qwen_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -34,28 +36,31 @@ use super::opencode_config::{
 };
 use super::types::{
     AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
-    ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
-    CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
-    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
-    GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
-    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, LettaInstallPaths,
-    LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
-    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
-    QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
+    ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CommandCodeInstallPaths,
+    CommandCodeUninstallResult, CopilotInstallPaths, CopilotUninstallResult, CursorInstallPaths,
+    CursorUninstallResult, DevinInstallPaths, DevinUninstallResult, DroidInstallPaths,
+    DroidUninstallResult, GrokInstallPaths, GrokUninstallResult, HermesInstallPaths,
+    HermesUninstallResult, KiloInstallPaths, KiloUninstallResult, KimiInstallPaths,
+    KimiUninstallResult, LettaInstallPaths, LettaUninstallResult, MastracodeInstallPaths,
+    MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
+    OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
+    QwenInstallPaths, QwenUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
     ANTIGRAVITY_CLI_HOOK_INSTALL_NAME, ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC, CLAUDE_HOOK_ASSET,
-    CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET,
-    COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME, COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS,
-    CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME, DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS,
-    DEVIN_HOOK_INSTALL_NAME, DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET,
-    DROID_HOOK_EVENTS, DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS,
-    GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
-    HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
-    HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
-    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LETTA_HOOK_ASSET, LETTA_HOOK_INSTALL_NAME,
-    LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
+    CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME, COMMAND_CODE_HOOK_ASSET,
+    COMMAND_CODE_HOOK_INSTALL_NAME, COMMAND_CODE_SETTINGS_INSTALL_NAME,
+    COMMAND_CODE_TRUSTED_HOOKS_INSTALL_NAME, COPILOT_HOOK_ASSET, COPILOT_HOOK_EVENTS,
+    COPILOT_HOOK_INSTALL_NAME, COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS, CURSOR_HOOK_ASSET,
+    CURSOR_HOOK_INSTALL_NAME, DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS, DEVIN_HOOK_INSTALL_NAME,
+    DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET, DROID_HOOK_EVENTS,
+    DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, GROK_HOOK_ASSET,
+    GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME, HERMES_PLUGIN_INIT_ASSET,
+    HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
+    HERMES_PLUGIN_MANIFEST_INSTALL_NAME, INSTALL_WARNING_PREFIX, KILO_PLUGIN_ASSET,
+    KILO_PLUGIN_INSTALL_NAME, KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LETTA_HOOK_ASSET,
+    LETTA_HOOK_INSTALL_NAME, LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
     OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
     OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
@@ -1139,21 +1144,31 @@ fn cleanup_letta_install_artifact(path: &Path) {
     }
 }
 
-fn ensure_letta_session_hook(hooks: &mut Map<String, Value>, command: String) -> io::Result<()> {
+/// Append a `SessionStart` command handler. The timeout and `quiet` fields are
+/// per-agent because each settings schema differs: Letta takes a millisecond
+/// timeout plus `quiet`, while Command Code validates `timeout` as a number of
+/// seconds in `(0, 600]` and skips a handler whose timeout falls outside that
+/// range. Command Code reads no other field, so `cmd` passes neither.
+fn ensure_session_start_hook(
+    hooks: &mut Map<String, Value>,
+    command: String,
+    timeout: Option<u64>,
+    quiet: bool,
+) -> io::Result<()> {
     let entries = hooks
         .entry("SessionStart".to_string())
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .ok_or_else(|| io::Error::other("hook entries for SessionStart must be an array"))?;
 
-    entries.push(json!({
-        "hooks": [{
-            "type": "command",
-            "command": command,
-            "timeout": LETTA_HOOK_TIMEOUT_MS,
-            "quiet": true,
-        }],
-    }));
+    let mut handler = json!({ "type": "command", "command": command });
+    if let Some(timeout) = timeout {
+        handler["timeout"] = json!(timeout);
+    }
+    if quiet {
+        handler["quiet"] = json!(true);
+    }
+    entries.push(json!({ "hooks": [handler] }));
     Ok(())
 }
 
@@ -1190,7 +1205,12 @@ pub(crate) fn install_letta() -> io::Result<LettaInstallPaths> {
         "letta settings hooks",
     )?;
     remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
-    ensure_letta_session_hook(hooks, hook_command(&hook_path, Some("session")))?;
+    ensure_session_start_hook(
+        hooks,
+        hook_command(&hook_path, Some("session")),
+        Some(LETTA_HOOK_TIMEOUT_MS),
+        true,
+    )?;
 
     let settings_contents = serde_json::to_string_pretty(&settings)?;
     let (hook_staged, hook_backup) =
@@ -1423,6 +1443,300 @@ pub(crate) fn uninstall_letta() -> io::Result<LettaUninstallResult> {
         settings_path,
         removed_hook_file,
         updated_settings,
+    })
+}
+
+/// Command Code refuses to run a hook it does not trust. This mirrors the
+/// community plugin's fingerprint: the first 16 hex characters of the SHA-256 of
+/// the exact command string written into `settings.json`.
+pub(crate) fn command_code_hook_fingerprint(command: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    format!("{:x}", Sha256::digest(command.as_bytes()))
+        .chars()
+        .take(16)
+        .collect()
+}
+
+fn command_code_trusted_at() -> io::Result<String> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|err| io::Error::other(format!("failed to format trustedAt timestamp: {err}")))
+}
+
+fn read_json_config(path: &Path) -> io::Result<Value> {
+    if !path.is_file() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str::<Value>(&fs::read_to_string(path)?)
+        .map_err(|err| io::Error::other(format!("failed to parse {}: {err}", path.display())))
+}
+
+/// Trusted fingerprints live under the empty-string (global) root, alongside
+/// per-project roots this integration must leave alone:
+/// `{ "": [{ "fingerprint", "trustedAt" }], "<project>": [...] }`.
+fn command_code_trusted_root<'a>(
+    trusted: &'a mut Value,
+    trusted_hooks_path: &Path,
+) -> io::Result<&'a mut Vec<Value>> {
+    let root = trusted.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "trusted hooks at {} must be a JSON object",
+            trusted_hooks_path.display()
+        ))
+    })?;
+
+    root.entry(String::new())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "trusted hooks global entry at {} must be an array",
+                trusted_hooks_path.display()
+            ))
+        })
+}
+
+fn add_command_code_trusted_hook(
+    trusted: &mut Value,
+    trusted_hooks_path: &Path,
+    fingerprint: &str,
+    trusted_at: &str,
+) -> io::Result<()> {
+    let entries = command_code_trusted_root(trusted, trusted_hooks_path)?;
+    entries.retain(|entry| entry.get("fingerprint").and_then(Value::as_str) != Some(fingerprint));
+    entries.push(json!({ "fingerprint": fingerprint, "trustedAt": trusted_at }));
+    Ok(())
+}
+
+fn remove_command_code_trusted_hook(
+    trusted: &mut Value,
+    trusted_hooks_path: &Path,
+    fingerprint: &str,
+) -> io::Result<bool> {
+    let entries = command_code_trusted_root(trusted, trusted_hooks_path)?;
+    let before = entries.len();
+    entries.retain(|entry| entry.get("fingerprint").and_then(Value::as_str) != Some(fingerprint));
+    Ok(entries.len() != before)
+}
+
+/// SessionStart commands that report as Command Code but are not this hook. The
+/// community plugin installs one under source `commandcode`; while it stays
+/// installed its state reports outrank the bundled cmd screen manifest, so
+/// install warns about it and never removes it.
+fn foreign_command_code_hook_commands(hooks: &Map<String, Value>, hook_path: &Path) -> Vec<String> {
+    let owned = hook_command_variants(hook_path, Some("session"));
+    hooks
+        .get("SessionStart")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("hooks").and_then(Value::as_array))
+                .flatten()
+                .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+                .filter(|command| {
+                    !owned.iter().any(|owned| owned == command)
+                        && (command.contains("--agent cmd")
+                            || command.contains("--agent command-code"))
+                })
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn install_command_code() -> io::Result<CommandCodeInstallPaths> {
+    let dir = command_code_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "command code config directory not found at {}. install command code first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(COMMAND_CODE_HOOK_INSTALL_NAME);
+    let settings_path = dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME);
+    let trusted_hooks_path = dir.join(COMMAND_CODE_TRUSTED_HOOKS_INSTALL_NAME);
+
+    let command = hook_command(&hook_path, Some("session"));
+    let fingerprint = command_code_hook_fingerprint(&command);
+    let trusted_at = command_code_trusted_at()?;
+
+    // Both config files are parsed before anything is staged or published, so an
+    // unreadable or non-object config never leaves a hook behind.
+    let mut settings = read_json_config(&settings_path)?;
+    let mut trusted_hooks = read_json_config(&trusted_hooks_path)?;
+
+    let mut warnings = Vec::new();
+    {
+        let hooks = ensure_hooks_object(
+            &mut settings,
+            &settings_path,
+            "command code settings",
+            "command code settings hooks",
+        )?;
+        for foreign in foreign_command_code_hook_commands(hooks, &hook_path) {
+            warnings.push(format!(
+                "{INSTALL_WARNING_PREFIX} another SessionStart hook already reports as Command Code ({foreign}); remove it or it will outrank the cmd screen manifest"
+            ));
+        }
+        remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+        ensure_session_start_hook(hooks, command, None, false)?;
+    }
+    add_command_code_trusted_hook(
+        &mut trusted_hooks,
+        &trusted_hooks_path,
+        &fingerprint,
+        &trusted_at,
+    )?;
+
+    let settings_contents = serde_json::to_string_pretty(&settings)?;
+    let trusted_hooks_contents = serde_json::to_string_pretty(&trusted_hooks)?;
+
+    // Shared staged-install helpers (originally written for Letta): each file is
+    // staged, its prior contents are backed up, and every earlier publish is
+    // rolled back if a later one fails.
+    let (hook_staged, hook_backup) =
+        prepare_letta_install_file(&hook_path, COMMAND_CODE_HOOK_ASSET.as_bytes(), true, false)?;
+    let (settings_staged, settings_backup) =
+        match prepare_letta_install_file(&settings_path, settings_contents.as_bytes(), false, true)
+        {
+            Ok(paths) => paths,
+            Err(err) => {
+                cleanup_letta_install_artifact(&hook_staged);
+                return Err(err);
+            }
+        };
+    let (trusted_staged, trusted_backup) = match prepare_letta_install_file(
+        &trusted_hooks_path,
+        trusted_hooks_contents.as_bytes(),
+        false,
+        true,
+    ) {
+        Ok(paths) => paths,
+        Err(err) => {
+            cleanup_letta_install_artifact(&hook_staged);
+            cleanup_letta_install_artifact(&settings_staged);
+            return Err(err);
+        }
+    };
+
+    let hook_had_original = match publish_letta_install_file(&hook_path, &hook_staged, &hook_backup)
+    {
+        Ok(had_original) => had_original,
+        Err(err) => {
+            cleanup_letta_install_artifact(&hook_staged);
+            cleanup_letta_install_artifact(&settings_staged);
+            cleanup_letta_install_artifact(&trusted_staged);
+            return Err(err);
+        }
+    };
+    let settings_had_original =
+        match publish_letta_install_file(&settings_path, &settings_staged, &settings_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                let err = combine_letta_install_errors(
+                    err,
+                    rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
+                );
+                cleanup_letta_install_artifact(&settings_staged);
+                cleanup_letta_install_artifact(&trusted_staged);
+                return Err(err);
+            }
+        };
+    let trusted_had_original =
+        match publish_letta_install_file(&trusted_hooks_path, &trusted_staged, &trusted_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                let err = combine_letta_install_errors(
+                    err,
+                    rollback_letta_install_file(
+                        &settings_path,
+                        &settings_backup,
+                        settings_had_original,
+                    ),
+                );
+                let err = combine_letta_install_errors(
+                    err,
+                    rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
+                );
+                cleanup_letta_install_artifact(&trusted_staged);
+                return Err(err);
+            }
+        };
+
+    if hook_had_original {
+        cleanup_letta_install_artifact(&hook_backup);
+    }
+    if settings_had_original {
+        cleanup_letta_install_artifact(&settings_backup);
+    }
+    if trusted_had_original {
+        cleanup_letta_install_artifact(&trusted_backup);
+    }
+
+    Ok(CommandCodeInstallPaths {
+        hook_path,
+        settings_path,
+        trusted_hooks_path,
+        warnings,
+    })
+}
+
+pub(crate) fn uninstall_command_code() -> io::Result<CommandCodeUninstallResult> {
+    let dir = command_code_dir()?;
+    let hook_path = dir.join("hooks").join(COMMAND_CODE_HOOK_INSTALL_NAME);
+    let settings_path = dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME);
+    let trusted_hooks_path = dir.join(COMMAND_CODE_TRUSTED_HOOKS_INSTALL_NAME);
+    let fingerprint = command_code_hook_fingerprint(&hook_command(&hook_path, Some("session")));
+    let mut updated_settings = false;
+    let mut updated_trusted_hooks = false;
+
+    if settings_path.is_file() {
+        let mut settings = read_json_config(&settings_path)?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "command code settings",
+            "command code settings hooks",
+        )? {
+            updated_settings |=
+                remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+        }
+
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    // Only this fingerprint leaves the global root; per-project roots and every
+    // other fingerprint stay, and the file itself is never deleted.
+    if trusted_hooks_path.is_file() {
+        let mut trusted_hooks = read_json_config(&trusted_hooks_path)?;
+        if remove_command_code_trusted_hook(&mut trusted_hooks, &trusted_hooks_path, &fingerprint)?
+        {
+            write_config(
+                &trusted_hooks_path,
+                serde_json::to_string_pretty(&trusted_hooks)?,
+            )?;
+            updated_trusted_hooks = true;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(CommandCodeUninstallResult {
+        hook_path,
+        settings_path,
+        trusted_hooks_path,
+        removed_hook_file,
+        updated_settings,
+        updated_trusted_hooks,
     })
 }
 

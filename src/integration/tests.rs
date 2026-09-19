@@ -145,6 +145,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    std::env::remove_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR);
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -4738,5 +4739,348 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
 
     std::env::remove_var(GROK_HOME_ENV_VAR);
     clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+/// Point Command Code's config lookup at a fresh temp directory for one test.
+fn use_temp_command_code_dir(base: &Path) -> (PathBuf, Option<std::ffi::OsString>) {
+    let dir = base.join(".commandcode");
+    fs::create_dir_all(&dir).unwrap();
+    let previous = std::env::var_os(COMMAND_CODE_CONFIG_DIR_ENV_VAR);
+    std::env::set_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR, &dir);
+    (dir, previous)
+}
+
+fn restore_command_code_dir(previous: Option<std::ffi::OsString>) {
+    match previous {
+        Some(value) => std::env::set_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR, value),
+        None => std::env::remove_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR),
+    }
+}
+
+#[test]
+fn command_code_hook_fingerprint_matches_known_digests() {
+    // The first digest is taken from a live `~/.commandcode/trusted-hooks.json`
+    // written by the community plugin's own installer, so it pins the algorithm
+    // (SHA-256 hex, first 16 characters) against an independent implementation.
+    assert_eq!(
+        command_code_hook_fingerprint(
+            "sh /home/peter/.config/herdr/plugins/github/commandcode.integration-ce963938f75f/cmd-hooks/herdr-status.sh"
+        ),
+        "8f8461b8eb2cb5aa"
+    );
+    assert_eq!(
+        command_code_hook_fingerprint(
+            "bash '/home/user/.commandcode/hooks/herdr-agent-session.sh' session"
+        ),
+        "b1fb716026b7e422"
+    );
+}
+
+#[test]
+fn command_code_install_writes_hook_and_session_start_entry() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+
+    let settings_path = cc_dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME);
+    fs::write(
+        &settings_path,
+        r#"{"theme":"dark","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+    )
+    .unwrap();
+    let trusted_path = cc_dir.join(COMMAND_CODE_TRUSTED_HOOKS_INSTALL_NAME);
+    fs::write(
+        &trusted_path,
+        r#"{"": [{"fingerprint": "aaaaaaaaaaaaaaaa", "trustedAt": "2026-09-15T18:02:38.252Z"}], "/home/user/project": [{"fingerprint": "bbbbbbbbbbbbbbbb", "trustedAt": "2026-09-16T01:58:21.615Z"}]}"#,
+    )
+    .unwrap();
+
+    let installed = install_command_code().unwrap();
+    assert_eq!(
+        installed.hook_path,
+        cc_dir.join("hooks").join(COMMAND_CODE_HOOK_INSTALL_NAME)
+    );
+    assert!(installed.warnings.is_empty());
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(settings["theme"], "dark");
+    let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["hooks"][0]["command"], "echo user");
+    assert!(entries[1].get("matcher").is_none());
+    let ours = entries[1]["hooks"][0]["command"].as_str().unwrap();
+    assert!(ours.ends_with("session"));
+    // Command Code validates `timeout` as a number of seconds in (0, 600] and
+    // skips a handler outside that range, and it reads no `quiet` field, so the
+    // handler carries exactly the two fields its schema requires.
+    assert_eq!(
+        entries[1]["hooks"][0],
+        json!({ "type": "command", "command": ours })
+    );
+
+    let trusted: Value = serde_json::from_str(&fs::read_to_string(&trusted_path).unwrap()).unwrap();
+    let global = trusted[""].as_array().unwrap();
+    assert_eq!(global.len(), 2);
+    assert_eq!(global[0]["fingerprint"], "aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        global[1]["fingerprint"],
+        command_code_hook_fingerprint(ours)
+    );
+    assert!(global[1]["trustedAt"]
+        .as_str()
+        .is_some_and(|value| value.contains('T')));
+    // Other roots are never touched.
+    assert_eq!(
+        trusted["/home/user/project"][0]["fingerprint"],
+        "bbbbbbbbbbbbbbbb"
+    );
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_code_install_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+    let settings_path = cc_dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME);
+    let trusted_path = cc_dir.join(COMMAND_CODE_TRUSTED_HOOKS_INSTALL_NAME);
+
+    install_command_code().unwrap();
+    let first_settings = fs::read_to_string(&settings_path).unwrap();
+    let first_trusted = fs::read_to_string(&trusted_path).unwrap();
+
+    let installed = install_command_code().unwrap();
+    assert!(installed.warnings.is_empty());
+    assert_eq!(fs::read_to_string(&settings_path).unwrap(), first_settings);
+    // A second install refreshes trustedAt, so compare the fingerprints only.
+    let settings: Value = serde_json::from_str(&first_settings).unwrap();
+    assert_eq!(
+        settings["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1
+    );
+    let trusted: Value = serde_json::from_str(&fs::read_to_string(&trusted_path).unwrap()).unwrap();
+    assert_eq!(trusted[""].as_array().unwrap().len(), 1);
+    let trusted_before: Value = serde_json::from_str(&first_trusted).unwrap();
+    assert_eq!(
+        trusted_before[""][0]["fingerprint"],
+        trusted[""][0]["fingerprint"]
+    );
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_code_uninstall_removes_only_its_own_entry() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+    let settings_path = cc_dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME);
+    let trusted_path = cc_dir.join(COMMAND_CODE_TRUSTED_HOOKS_INSTALL_NAME);
+    let foreign = "sh /opt/community-plugin/cmd-hooks/herdr-status.sh --agent cmd";
+    fs::write(
+        &settings_path,
+        format!(
+            r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":{}}}]}}]}}}}"#,
+            serde_json::to_string(foreign).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &trusted_path,
+        r#"{"/home/user/project": [{"fingerprint": "bbbbbbbbbbbbbbbb", "trustedAt": "2026-09-16T01:58:21.615Z"}]}"#,
+    )
+    .unwrap();
+
+    let installed = install_command_code().unwrap();
+    // The foreign hook is reported, never removed.
+    assert_eq!(installed.warnings.len(), 1);
+    assert!(installed.warnings[0].starts_with(INSTALL_WARNING_PREFIX));
+
+    let result = uninstall_command_code().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_settings);
+    assert!(result.updated_trusted_hooks);
+    assert!(!installed.hook_path.exists());
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    let remaining = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["hooks"][0]["command"], foreign);
+
+    // The file survives, and the project root is untouched.
+    let trusted: Value = serde_json::from_str(&fs::read_to_string(&trusted_path).unwrap()).unwrap();
+    assert!(trusted[""].as_array().unwrap().is_empty());
+    assert_eq!(
+        trusted["/home/user/project"][0]["fingerprint"],
+        "bbbbbbbbbbbbbbbb"
+    );
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_code_install_warns_about_foreign_agent_hook() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+    let settings_path = cc_dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME);
+    let foreign = "sh /opt/our-own/herdr-agent-state.sh --source commandcode --agent cmd";
+    fs::write(
+        &settings_path,
+        format!(
+            r#"{{"hooks":{{"SessionStart":[{{"hooks":[{{"type":"command","command":{}}}]}}]}}}}"#,
+            serde_json::to_string(foreign).unwrap()
+        ),
+    )
+    .unwrap();
+
+    let installed = install_command_code().unwrap();
+    assert_eq!(installed.warnings.len(), 1);
+    assert!(installed.warnings[0].starts_with(INSTALL_WARNING_PREFIX));
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["hooks"][0]["command"], foreign);
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_code_install_requires_config_directory() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let missing = base.join("no-command-code-here");
+    let previous = std::env::var_os(COMMAND_CODE_CONFIG_DIR_ENV_VAR);
+    std::env::set_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR, &missing);
+
+    let err = install_command_code().unwrap_err().to_string();
+    assert!(err.contains("command code config directory not found"));
+    assert!(!missing.exists());
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_code_install_does_not_publish_hook_when_settings_are_invalid() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+    fs::write(cc_dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME), "not json").unwrap();
+
+    assert!(install_command_code().is_err());
+    assert!(!cc_dir
+        .join("hooks")
+        .join(COMMAND_CODE_HOOK_INSTALL_NAME)
+        .exists());
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_code_status_reports_experimental_label() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+
+    let before = experimental_command_code_integration_status().unwrap();
+    assert_eq!(before.label, "cmd");
+    assert_eq!(
+        before.path,
+        cc_dir.join("hooks").join(COMMAND_CODE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(before.state, IntegrationStatusKind::NotInstalled);
+
+    install_command_code().unwrap();
+    let after = experimental_command_code_integration_status().unwrap();
+    assert_eq!(after.state, IntegrationStatusKind::Current);
+    assert_eq!(
+        after.installed_version,
+        Some(COMMAND_CODE_INTEGRATION_VERSION)
+    );
+    assert!(EXPERIMENTAL_INTEGRATION_TARGET_LABELS.contains(&"cmd"));
+
+    // The frozen client endpoint enum is untouched: no canonical label is "cmd".
+    assert!(crate::api::schema::IntegrationTarget::ALL
+        .iter()
+        .all(|target| integration_target_label(*target) != "cmd"));
+
+    restore_command_code_dir(previous);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn command_code_session_hook_is_silent_and_reports_official_session() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let (cc_dir, previous) = use_temp_command_code_dir(&base);
+    let installed = install_command_code().unwrap();
+    assert_eq!(
+        installed.settings_path,
+        cc_dir.join(COMMAND_CODE_SETTINGS_INSTALL_NAME)
+    );
+
+    let capture = base.join("args.txt");
+    let fake_herdr = base.join("herdr");
+    fs::write(
+        &fake_herdr,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\n",
+            capture.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&fake_herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_herdr, permissions).unwrap();
+
+    let mut child = Command::new("sh")
+        .arg(&installed.hook_path)
+        .arg("session")
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HERDR_BIN_PATH", &fake_herdr)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"hook_event_name":"SessionStart","session_id":"cmd-session-id"}"#)
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+
+    let args = fs::read_to_string(&capture).unwrap();
+    assert!(args.contains("report-agent-session w1:p2"));
+    assert!(args.contains("--source herdr:cmd --agent cmd"));
+    assert!(args.contains("--agent-session-id cmd-session-id"));
+    assert!(args.contains("--session-start-source new"));
+    // Session identity only: the screen manifest owns agent state.
+    assert!(!args.contains("report-agent "));
+
+    restore_command_code_dir(previous);
     let _ = fs::remove_dir_all(base);
 }

@@ -24,6 +24,10 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+/// Herdr-level override for Command Code's config home. Command Code has no
+/// documented config-directory variable of its own, so this is primarily a test
+/// seam, mirroring `GROK_CONFIG_DIR`.
+pub(crate) const COMMAND_CODE_CONFIG_DIR_ENV_VAR: &str = "HERDR_COMMAND_CODE_DIR";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -179,6 +183,10 @@ pub(crate) fn letta_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".letta"))
 }
 
+pub(crate) fn command_code_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(COMMAND_CODE_CONFIG_DIR_ENV_VAR, &[".commandcode"])
+}
+
 pub(crate) fn cursor_dir() -> io::Result<PathBuf> {
     config_dir_from_env_or_home(CURSOR_CONFIG_DIR_ENV_VAR, &[".cursor"])
 }
@@ -288,6 +296,26 @@ mod tests {
         match original {
             Some(value) => std::env::set_var("XDG_STATE_HOME", value),
             None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+    }
+
+    #[test]
+    fn command_code_dir_honors_the_herdr_override_and_defaults_to_home() {
+        let _lock = integration_env_lock();
+        let original = std::env::var_os(COMMAND_CODE_CONFIG_DIR_ENV_VAR);
+        std::env::remove_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR);
+        assert_eq!(
+            command_code_dir().unwrap(),
+            home_dir().unwrap().join(".commandcode")
+        );
+
+        let custom = std::env::temp_dir().join("herdr-command-code-config");
+        std::env::set_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR, &custom);
+        assert_eq!(command_code_dir().unwrap(), custom);
+
+        match original {
+            Some(value) => std::env::set_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR, value),
+            None => std::env::remove_var(COMMAND_CODE_CONFIG_DIR_ENV_VAR),
         }
     }
 }

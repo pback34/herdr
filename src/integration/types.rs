@@ -148,6 +148,24 @@ pub(crate) struct LettaUninstallResult {
     pub updated_settings: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct CommandCodeInstallPaths {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub trusted_hooks_path: PathBuf,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CommandCodeUninstallResult {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub trusted_hooks_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_settings: bool,
+    pub updated_trusted_hooks: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IntegrationStatus {
     pub target: crate::api::schema::IntegrationTarget,

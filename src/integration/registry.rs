@@ -515,6 +515,23 @@ pub(crate) fn experimental_letta_integration_status() -> Option<super::Experimen
     })
 }
 
+pub(crate) fn experimental_command_code_integration_status(
+) -> Option<super::ExperimentalIntegrationStatus> {
+    let path = command_code_dir()
+        .ok()?
+        .join("hooks")
+        .join(super::COMMAND_CODE_HOOK_INSTALL_NAME);
+    let (state, installed_version) =
+        integration_state_for_path(&path, super::COMMAND_CODE_INTEGRATION_VERSION);
+    Some(super::ExperimentalIntegrationStatus {
+        label: "cmd",
+        path,
+        state,
+        installed_version,
+        expected_version: super::COMMAND_CODE_INTEGRATION_VERSION,
+    })
+}
+
 pub(crate) fn parse_integration_version(content: &str) -> Option<u32> {
     content.lines().find_map(|line| {
         let marker_line = line
