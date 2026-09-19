@@ -65,10 +65,11 @@ pub enum Agent {
     Letta,
     Maki,
     Muse,
+    Cmd,
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -93,6 +94,7 @@ impl Agent {
         Self::Letta,
         Self::Maki,
         Self::Muse,
+        Self::Cmd,
     ];
 
     pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
@@ -147,6 +149,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Cmd => "cmd",
     }
 }
 
@@ -182,6 +185,15 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Cmd => {
+            // `cmd` is the Windows command interpreter, so the alias is the only
+            // launchable name on Windows.
+            if cfg!(windows) {
+                "command-code"
+            } else {
+                "cmd"
+            }
+        }
     }
 }
 
@@ -222,6 +234,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "letta" | "letta-code" | "letta code" => Some(Agent::Letta),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        "cmd" | "command-code" => Some(Agent::Cmd),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -254,7 +267,7 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     {
         let candidate = normalized_process_name(process);
         if let Some(agent) = identify_agent(&candidate) {
-            if agent != Agent::Letta || is_interactive_letta_process(process) {
+            if agent_eligible_for_process(agent, process) {
                 return Some((agent, candidate));
             }
         }
@@ -267,7 +280,7 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
         let Some(agent) = identify_agent(&candidate) else {
             continue;
         };
-        if agent == Agent::Letta && !is_interactive_letta_process(process) {
+        if !agent_eligible_for_process(agent, process) {
             continue;
         }
         let score = process_priority(process, &candidate);
@@ -343,6 +356,7 @@ pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str)
             | ("herdr:qwen", "qwen")
             | ("herdr:letta", "letta")
             | ("herdr:antigravity_cli", "agy")
+            | ("herdr:cmd", "cmd")
     )
 }
 
@@ -394,7 +408,7 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
             {
                 if matches!(
                     identify_agent(&wrapped_agent),
-                    Some(Agent::Qwen | Agent::Cline | Agent::Letta)
+                    Some(Agent::Qwen | Agent::Cline | Agent::Letta | Agent::Cmd)
                 ) {
                     return wrapped_agent;
                 }
@@ -620,7 +634,32 @@ fn agent_name_from_path_token(token: &str) -> Option<String> {
         .or_else(|| resolved_agent_name_from_path_token(trimmed))
 }
 
+/// True when a path token names the packaged Command Code CLI, for example
+/// `<prefix>/node_modules/command-code/dist/index.mjs`. The entry script name
+/// can change between releases, so this matches the package's `dist` directory
+/// rather than a specific file. Separators are normalized so Windows paths and
+/// `/`-separated command lines both match.
+fn is_command_code_package_token(token: &str) -> bool {
+    let normalized: String = token
+        .chars()
+        .map(|ch| {
+            if ch == '\\' {
+                '/'
+            } else {
+                ch.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    let normalized = normalized.trim_matches('"');
+    normalized.starts_with("node_modules/command-code/dist")
+        || normalized.contains("/node_modules/command-code/dist")
+}
+
 fn agent_name_from_known_package_path(path: &str) -> Option<String> {
+    if is_command_code_package_token(path) {
+        return Some(agent_label(Agent::Cmd).to_string());
+    }
+
     let raw_components: Vec<&str> = path
         .split(['/', '\\'])
         .filter(|component| !component.is_empty())
@@ -786,6 +825,43 @@ fn is_interactive_letta_process(process: &crate::platform::ForegroundProcess) ->
     letta_first_arg_after_backend_selection(cli_args).is_none_or(|arg| arg.starts_with('-'))
 }
 
+/// Command Code's launcher is named `cmd`, which collides with the Windows
+/// command interpreter, so a bare basename is not evidence. The running process
+/// must carry a positive Command Code marker: Node sets the process title to
+/// `command-code`, and packaged installs run a script under
+/// `node_modules/command-code/dist`.
+fn is_command_code_process(process: &crate::platform::ForegroundProcess) -> bool {
+    let effective = process.argv0.as_deref().unwrap_or(&process.name);
+    if normalized_agent_lookup_name(path_basename(effective)) == "command-code" {
+        return true;
+    }
+
+    if process
+        .argv
+        .as_deref()
+        .is_some_and(|argv| argv.iter().any(|arg| is_command_code_package_token(arg)))
+    {
+        return true;
+    }
+
+    process.cmdline.as_deref().is_some_and(|cmdline| {
+        cmdline
+            .split_whitespace()
+            .any(is_command_code_package_token)
+    })
+}
+
+/// Per-agent process filters applied before a name match is accepted. Letta's
+/// non-interactive entrypoints are not agents, and the Windows command
+/// interpreter must never be mistaken for Command Code.
+fn agent_eligible_for_process(agent: Agent, process: &crate::platform::ForegroundProcess) -> bool {
+    match agent {
+        Agent::Letta => is_interactive_letta_process(process),
+        Agent::Cmd => is_command_code_process(process),
+        _ => true,
+    }
+}
+
 fn resolved_agent_name_from_path_token(token: &str) -> Option<String> {
     let path = std::path::Path::new(token);
     if path.components().count() < 2 {
@@ -946,6 +1022,9 @@ mod tests {
             identify_agent(r"C:\Users\user\muse-bin-0.2.1-R1215.1.exe"),
             Some(Agent::Muse)
         );
+        assert_eq!(identify_agent("cmd"), Some(Agent::Cmd));
+        assert_eq!(identify_agent("command-code"), Some(Agent::Cmd));
+        assert_eq!(identify_agent("command-code.exe"), Some(Agent::Cmd));
     }
 
     #[test]
@@ -974,6 +1053,8 @@ mod tests {
         assert_eq!(parse_agent_label("letta-code"), Some(Agent::Letta));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(parse_agent_label("cmd"), Some(Agent::Cmd));
+        assert_eq!(parse_agent_label("command-code"), Some(Agent::Cmd));
     }
 
     #[test]
@@ -1019,10 +1100,28 @@ mod tests {
             (Agent::Letta, "letta"),
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
+            (
+                Agent::Cmd,
+                if cfg!(windows) { "command-code" } else { "cmd" },
+            ),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
             assert_eq!(interactive_agent_executable(agent), executable);
+        }
+    }
+
+    #[test]
+    fn interactive_agent_executable_avoids_the_windows_shell_name() {
+        let executable = interactive_agent_executable(Agent::Cmd);
+        if cfg!(windows) {
+            assert_ne!(
+                executable, "cmd",
+                "`cmd` resolves to the Windows command interpreter, not Command Code"
+            );
+            assert_eq!(executable, "command-code");
+        } else {
+            assert_eq!(executable, "cmd");
         }
     }
 
@@ -1058,6 +1157,14 @@ mod tests {
     }
 
     #[test]
+    fn command_code_integration_is_session_identity_only() {
+        // `cmd` joins SCREEN_MANIFEST_AGENTS in the manifest step, so it is not in
+        // the loop above yet. This pins the identity-only classification now.
+        assert!(session_identity_only_integration("herdr:cmd", "cmd"));
+        assert!(!full_lifecycle_hook_authority("herdr:cmd", "cmd"));
+    }
+
+    #[test]
     fn identify_unknown_processes() {
         assert_eq!(identify_agent("bash"), None);
         assert_eq!(identify_agent("zsh"), None);
@@ -1070,6 +1177,8 @@ mod tests {
         assert_eq!(identify_agent("muse-bin"), None);
         assert_eq!(identify_agent("muse-bin-"), None);
         assert_eq!(identify_agent("muse-binary"), None);
+        assert_eq!(identify_agent("command-code-helper"), None);
+        assert_eq!(identify_agent("commandcode"), None);
     }
 
     #[test]
@@ -1525,6 +1634,141 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Kimi, "kimi".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_command_code_process_title() {
+        // Command Code sets its own process title, so the live process carries
+        // `command-code` rather than the `cmd` launcher name.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(123, "command-code", &["command-code"])],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Cmd, "command-code".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_command_code_package() {
+        for (name, argv) in [
+            (
+                "node",
+                vec!["node", "/usr/lib/node_modules/command-code/dist/index.mjs"],
+            ),
+            (
+                "node.exe",
+                vec![
+                    "node.exe",
+                    r"C:\Users\user\AppData\Roaming\npm\node_modules\command-code\dist\index.mjs",
+                ],
+            ),
+            // A wrapper can hide the runtime name; argv still carries the package
+            // path, which is the macOS and Windows marker.
+            (
+                "MainThread",
+                vec![
+                    "node",
+                    "/home/user/project/node_modules/command-code/dist/index.mjs",
+                ],
+            ),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, name, &argv)],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Cmd, "cmd".to_string())),
+                "argv: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_rejects_windows_command_interpreter() {
+        for argv in [
+            vec!["cmd.exe"],
+            vec!["cmd.exe", "/D", "/S", "/C", "dir"],
+            vec!["cmd.exe", "/C", "echo hi"],
+            vec!["cmd.exe", "/K", "npm run dev"],
+            vec![r"C:\Windows\System32\cmd.exe"],
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "cmd.exe", &argv)],
+            };
+
+            assert_eq!(identify_agent_in_job(&job), None, "argv: {argv:?}");
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_rejects_bare_cmd_process_name() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(123, "cmd", &["cmd"])],
+        };
+
+        assert_eq!(identify_agent_in_job(&job), None);
+    }
+
+    #[test]
+    fn identify_agent_in_job_keeps_windows_cmd_wrapped_agents() {
+        // The shell itself is rejected, but a wrapper that resolves to a real
+        // agent must still win. This is the interaction the Command Code process
+        // filter could most easily break.
+        for (command, expected) in [
+            (
+                r"C:\Users\herdr\AppData\Roaming\npm\node_modules\command-code\dist\index.mjs",
+                (Agent::Cmd, "cmd"),
+            ),
+            (
+                r"C:\Users\herdr\AppData\Roaming\npm\codex.cmd --model gpt-5",
+                (Agent::Codex, "codex"),
+            ),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 1,
+                processes: vec![foreground_process(
+                    1,
+                    "cmd.exe",
+                    &["cmd.exe", "/D", "/S", "/C", command],
+                )],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((expected.0, expected.1.to_string())),
+                "command: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_prefers_command_code_over_unrelated_cmd() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 400,
+            processes: vec![
+                foreground_process(400, "cmd.exe", &["cmd.exe"]),
+                foreground_process(
+                    401,
+                    "node.exe",
+                    &[
+                        "node.exe",
+                        r"C:\Users\user\AppData\Roaming\npm\node_modules\command-code\dist\index.mjs",
+                    ],
+                ),
+            ],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Cmd, "cmd".to_string()))
         );
     }
 
